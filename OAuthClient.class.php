@@ -185,8 +185,6 @@ class OAuthClient {
 		$content_type = explode(';',curl_getinfo($ch,CURLINFO_CONTENT_TYPE));
 		$content_type = array_shift($content_type);
 		
-		echo $result;
-		
 		if ($http_code == 200) {
 			curl_close($ch);
 			
