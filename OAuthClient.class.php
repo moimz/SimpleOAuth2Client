@@ -13,17 +13,18 @@ class OAuthClient {
 	protected $_headers = array();
 	protected $_params = array();
 	
-	private $_accessToken;
+	private $_accessToken = null;
+	private $_accessType = 'online';
+	private $_grantType = 'authorization_code';
+	private $_refreshToken = null;
 	
 	function __construct() {
 		$temp = explode('?',$_SERVER['REQUEST_URI']);
 		$this->_redirectUrl = 'http://'.$_SERVER['HTTP_HOST'].array_shift($temp);
 		
-		if ($this->getSession('OAuth') == null) {
-			$_SESSION['OAuth'] = array();
+		if ($this->getSession('OAuthAccessToken') == null) {
+			$_SESSION['OAuthAccessToken'] = array();
 		}
-		
-		$this->_accessToken = $this->getSession('OAuth');
 	}
 	
 	function getSession($name) {
@@ -31,10 +32,18 @@ class OAuthClient {
 	}
 	
 	function setClientId($clientId) {
-		if (empty($this->_accessToken[$clientId]) == true) {
-			$this->_accessToken[$clientId] = null;
-			$_SESSION['OAuth'] = $this->_accessToken;
+		if (!empty($_SESSION['OAuthAccessToken'][$clientId])) {
+			$this->_accessToken = $_SESSION['OAuthAccessToken'][$clientId];
+		} else {
+			$_SESSION['OAuthAccessToken'][$clientId] = null;
 		}
+		
+		if (!empty($_SESSION['OAuthRefreshToken'][$clientId])) {
+			$this->_refreshToken = $_SESSION['OAuthRefreshToken'][$clientId];
+		} else {
+			$_SESSION['OAuthRefreshToken'][$clientId] = null;
+		}
+		
 		$this->_clientId = $clientId;
 		return $this;
 	}
@@ -73,59 +82,116 @@ class OAuthClient {
 		return $this;
 	}
 	
-	function getAuthenticationUrl($extra_parameters=array()) {
-		$parameters = array_merge(array(
+	function getAuthenticationUrl() {
+		$params = array(
 			'response_type'=>'code',
 			'client_id' =>$this->_clientId,
 			'redirect_uri'=>$this->_redirectUrl,
-			'scope'=>$this->_scope
-		),$extra_parameters);
+			'scope'=>$this->_scope,
+			'access_type'=>$this->_accessType,
+			'approval_prompt'=>'auto'
+		);
 
 		return $this->_authUrl.'?'.http_build_query($parameters,null,'&');
 	}
 	
 	function getAccessToken() {
-		if ($this->_accessToken[$this->_clientId] != null) return $this->_accessToken[$this->_clientId];
+		if ($this->_accessToken != null && ($this->_accessToken->expires_in != 0 || $this->_accessToken->expires_in > time())) {
+			return $this->_accessToken;
+		} elseif ($this->_refreshToken != null) {
+			$this->setGrantType('refresh_token');
+			$this->authenticate();
+			
+			return $this->getAccessToken();
+		} else return null;
 	}
 	
-	function setAccessToken($token,$type='Url') {
-		$this->_accessToken[$this->_clientId] = new stdClass();
-		$this->_accessToken[$this->_clientId]->access_token = $token;
-		$this->_accessToken[$this->_clientId]->token_type = $type;
+	function setAccessType($type) {
+		$this->_accessType = $type;
+		return $this;
+	}
+	
+	function setAccessToken($token,$type='Url',$expires_in=0) {
+		$this->_accessToken = new stdClass();
+		$this->_accessToken->access_token = $token;
+		$this->_accessToken->token_type = $type;
+		$this->_accessToken->expires_in = $expires_in;
 		
-		$_SESSION['OAuth'] = $this->_accessToken;
+		$_SESSION['OAuthAccessToken'][$this->_clientId] = $this->_accessToken;
 		
 		return $this;
 	}
 	
-	function authenticate($code) {
-		if (strlen($code) == 0) die('Error');
+	function setRefreshToken($token) {
+		$this->_refreshToken = $token;
+		
+		$_SESSION['OAuthRefreshToken'][$this->_clientId] = $this->_refreshToken;
+		
+		// Store Refresh Token Here
+		
+		return $this;
+	}
+	
+	function setGrantType($type) {
+		$this->_grantType = $type;
+		
+		return $this;
+	}
+	
+	function getRefreshToken() {
+		return $this->_refreshToken;
+	}
+	
+	function authenticate($code='') {
+		if ($this->_grantType == 'authorization_code' && strlen($code) == 0) die('Error');
 		
 		$params = array();
-		$params['code'] = $code;
-		$params['grant_type'] = 'authorization_code';
+		$params['grant_type'] = $this->_grantType;
 		$params['client_id'] = $this->_clientId;
 		$params['client_secret'] = $this->_clientSecret;
 		$params['redirect_uri'] = $this->_redirectUrl;
 		
+		if ($this->_grantType == 'authorization_code') {
+			$params['code'] = $code;
+		} elseif ($this->_grantType == 'refresh_token') {
+			if (empty($this->_refreshToken)) die('Error');
+			$params['refresh_token'] = $this->_refreshToken;
+		}
+		
 		$token = $this->executeRequest($this->_tokenUrl,$params);
 		
-		if ($token !== false) {
-			$this->setAccessToken($token->access_token,isset($token->token_type) == true ? strtoupper($token->token_type) : 'URL');
+		if ($token !== false && !empty($token->access_token)) {
+			$this->setAccessToken($token->access_token,isset($token->token_type) == true ? strtoupper($token->token_type) : 'URL',isset($token->expires_in) == true ? time() + $token->expires_in : 0);
+			if (!empty($token->refresh_token)) $this->setRefreshToken($token->refresh_token);
+			$this->setAccessType('online');
+			$this->setGrantType('authorization_code');
+			
 			return true;
 		} else {
+			if ($this->_grantType == 'refresh_token') $this->setRefreshToken(null);
 			return false;
+		}
+	}
+	
+	function refreshToken() {
+		if ($this->_refreshToken !== null) {
+			$this->setGrantType('refresh_token');
+			$this->authenticate();
+		} else {
+			$location = $this->getAuthenticationUrl();
+			echo '<script>location.href="'.$location.'";</script>';
+			exit;
 		}
 	}
 	
 	function makeAccessHeader() {
 		if ($this->_isMakeAccessHeader === true) return;
 		
-		switch ($this->_accessToken[$this->_clientId]->token_type) {
+		switch ($this->_accessToken->token_type) {
 			case 'URL' :
-				$this->_params['access_token'] = $this->_accessToken[$this->_clientId]->access_token;
+				$this->_params['access_token'] = $this->_accessToken->access_token;
 			case 'BEARER' :
-				$this->_headers['Authorization'] = 'Bearer '.$this->_accessToken[$this->_clientId]->access_token;
+				$this->_headers['Authorization'] = 'Bearer '.$this->_accessToken->access_token;
 				break;
 		}
 		
@@ -133,7 +199,7 @@ class OAuthClient {
 	}
 	
 	function get($url,$params=array(),$headers=array()) {
-		if ($this->_accessToken[$this->_clientId] == null) return null;
+		if ($this->_accessToken == null) $this->refreshToken();
 		
 		$this->makeAccessHeader();
 		$headers = array_merge($this->_headers,$headers);
@@ -143,6 +209,8 @@ class OAuthClient {
 	}
 	
 	function post($url,$params=array(),$headers=array()) {
+		if ($this->_accessToken == null) $this->refreshToken();
+		
 		$this->makeAccessHeader();
 		$headers = array_merge($this->_headers,$headers);
 		$params = array_merge($this->_params,$params);
