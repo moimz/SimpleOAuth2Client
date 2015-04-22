@@ -27,7 +27,7 @@ if (isset($_GET['code']) == true) {
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=1000">
-<title>SimpleOAuth2Client Examples - GitHub</title>
+<title>SimpleOAuth2Client Examples - Google</title>
 </head>
 <body>
 	<pre>

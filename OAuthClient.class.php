@@ -92,12 +92,12 @@ class OAuthClient {
 			'approval_prompt'=>'auto'
 		);
 
-		return $this->_authUrl.'?'.http_build_query($parameters,null,'&');
+		return $this->_authUrl.'?'.http_build_query($params,null,'&');
 	}
 	
 	function getAccessToken() {
 		if ($this->_accessToken != null && ($this->_accessToken->expires_in != 0 || $this->_accessToken->expires_in > time())) {
-			return $this->_accessToken;
+			return $this->_accessToken->access_token;
 		} elseif ($this->_refreshToken != null) {
 			$this->setGrantType('refresh_token');
 			$this->authenticate();
@@ -263,7 +263,6 @@ class OAuthClient {
 				return (object)$result;
 			}
 		} else {
-			print_r(curl_error($ch));
 			curl_close($ch);
 			return false;
 		}
